@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 import regex as re
 
-from vllm.parser.engine.events import EventType
+from vllm.parser.engine.events import EventType, SemanticEvent
 from vllm.parser.engine.parser_engine import ParserEngine
 from vllm.parser.engine.parser_engine_config import (
     ParserEngineConfig,
@@ -31,6 +31,7 @@ from vllm.parser.engine.parser_engine_config import (
 )
 
 if TYPE_CHECKING:
+    from vllm.entrypoints.generate.base.protocol import DeltaMessage
     from vllm.entrypoints.openai.chat_completion.protocol import (
         ChatCompletionRequest,
     )
@@ -246,6 +247,48 @@ class Qwen3Parser(ParserEngine):
             tools,
             **kwargs,
         )
+        self._strip_reasoning_separator = False
+
+    def _reset(self, initial_state: ParserState | None = None) -> None:
+        super()._reset(initial_state=initial_state)
+        self._strip_reasoning_separator = False
+
+    @property
+    def reasoning_ended(self) -> bool:
+        # Keep the reasoning adapter active until its separator is consumed.
+        return super().reasoning_ended and not self._strip_reasoning_separator
+
+    def _events_to_delta(
+        self,
+        events: list[SemanticEvent],
+        finished: bool = False,
+    ) -> DeltaMessage | None:
+        if self.parser_engine_config.name == "qwen3":
+            for event in events:
+                if (
+                    event.type == EventType.REASONING_END
+                    and event.value == self.THINK_END
+                ):
+                    self._strip_reasoning_separator = True
+                elif event.type == EventType.TEXT_CHUNK:
+                    break
+                elif event.type == EventType.TOOL_CALL_START:
+                    if not self._deferred_content:
+                        self._strip_reasoning_separator = False
+                    break
+
+        delta = super()._events_to_delta(events, finished=finished)
+        if delta is not None and self._strip_reasoning_separator:
+            if delta.content is not None:
+                # The engine defers leading whitespace until content or EOF,
+                # so the template separator may arrive across multiple chunks.
+                delta.content = delta.content.removeprefix("\n\n") or None
+                self._strip_reasoning_separator = False
+            if delta.tool_calls:
+                self._strip_reasoning_separator = False
+            if not (delta.content or delta.reasoning or delta.tool_calls):
+                return None
+        return delta
 
     def extract_reasoning(
         self,
@@ -254,4 +297,11 @@ class Qwen3Parser(ParserEngine):
     ) -> tuple[str | None, str | None]:
         if not self.thinking_enabled:
             return None, model_output
-        return super().extract_reasoning(model_output, request)
+        reasoning, content = super().extract_reasoning(model_output, request)
+        if (
+            self.parser_engine_config.name == "qwen3"
+            and content
+            and model_output.partition(self.THINK_END)[2].startswith("\n\n")
+        ):
+            content = content.removeprefix("\n\n") or None
+        return reasoning, content

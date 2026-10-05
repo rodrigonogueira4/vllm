@@ -358,9 +358,11 @@ def _raw_tool_suppression_expectations(
     if think_end:
         pos = after_reasoning.find(think_end)
         if pos >= 0:
-            if include_tool_block:
-                return (reasoning, after_reasoning[pos + len(think_end) :])
             after_reasoning = after_reasoning[pos + len(think_end) :]
+            if sample.id.startswith("qwen3-"):
+                after_reasoning = after_reasoning.removeprefix("\n\n")
+            if include_tool_block:
+                return (reasoning, after_reasoning)
     if tool_start:
         pos = after_reasoning.find(tool_start)
         if pos >= 0:

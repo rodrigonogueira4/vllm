@@ -21,6 +21,7 @@ from vllm.parser.engine.registered_adapters import (
     Qwen3ParserReasoningAdapter,
     Qwen3ParserToolAdapter,
 )
+from vllm.parser.parser_manager import ParserManager
 from vllm.parser.qwen3 import Qwen3Parser, qwen3_config
 
 _THINK_START_ID = 50
@@ -160,6 +161,95 @@ class TestNonStreaming:
         reasoning, content = parser.extract_reasoning(text, None)
         assert reasoning == "Reasoning here."
         assert content == "Content here.More content."
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected"),
+    [
+        ("\n\nABC", "ABC"),
+        ("\n\n\n\n  ABC\n\n", "\n\n  ABC\n\n"),
+        ("\nABC", "\nABC"),
+        ("  ABC\n", "  ABC\n"),
+        ("\n\n", ""),
+        ("\n", "\n"),
+        ("", ""),
+    ],
+)
+@pytest.mark.parametrize(
+    "mode", ["extract", "parse", "stream", "adapter", "delegating", "reasoning_only"]
+)
+def test_reasoning_separator(
+    parser, mock_tokenizer, mock_request, suffix, expected, mode
+):
+    """Consume template markup once, preserving whitespace belonging to content."""
+    text = "Reasoning.\n</think>" + suffix
+    if mode == "extract":
+        reasoning, content = parser.extract_reasoning(text, mock_request)
+    elif mode == "parse":
+        reasoning, content, _ = parser.parse(text, mock_request)
+    else:
+        if mode == "adapter":
+            parser = Qwen3ParserReasoningAdapter(mock_tokenizer)
+            reasoning, content = simulate_reasoning_streaming(
+                parser, ["Reasoning.\n", "</think>", *suffix]
+            )
+        else:
+            if mode == "delegating":
+                parser = _Qwen3DelegatingParser(mock_tokenizer)
+            elif mode == "reasoning_only":
+                parser = ParserManager.get_parser(reasoning_parser_name="qwen3")(
+                    mock_tokenizer
+                )
+            chunks = ["Reasoning.\n", "</think>", *suffix]
+            deltas = [
+                parser.parse_delta(
+                    chunk,
+                    [_THINK_END_ID] if chunk == "</think>" else [_TEXT_ID],
+                    mock_request,
+                    finished=i == len(chunks) - 1,
+                )
+                for i, chunk in enumerate(chunks)
+            ]
+            reasoning = "".join(d.reasoning or "" for d in deltas if d)
+            content = "".join(d.content or "" for d in deltas if d)
+        if mode == "adapter":
+            final = parser.finish_streaming()
+            if final:
+                reasoning += final.reasoning or ""
+                content += final.content or ""
+    assert reasoning == "Reasoning.\n"
+    assert (content or "") == expected
+
+
+@pytest.mark.parametrize("thinking", [True, False])
+def test_separator_is_not_stripped_without_generated_reasoning(
+    parser, mock_request, thinking
+):
+    parser = Qwen3Parser(
+        parser.model_tokenizer, chat_template_kwargs={"enable_thinking": thinking}
+    )
+    text = "\n\n  ABC\n\n"
+    reasoning, content, _ = parser.parse(text, mock_request)
+    assert (reasoning, content) == ((text, None) if thinking else (None, text))
+
+
+@pytest.mark.parametrize("chunk_size", [1, 1000])
+def test_separator_does_not_apply_after_suppressed_tool(
+    parser, mock_request, chunk_size
+):
+    mock_request.tool_choice = "none"
+    mock_request.tools = [{"type": "function", "function": {"name": "read"}}]
+    text = "Reasoning.</think><tool_call><function=read></function></tool_call>\n\nABC"
+    deltas = [
+        parser.parse_delta(
+            text[i : i + chunk_size],
+            [],
+            mock_request,
+            finished=i + chunk_size >= len(text),
+        )
+        for i in range(0, len(text), chunk_size)
+    ]
+    assert "".join(d.content or "" for d in deltas if d) == "\n\nABC"
 
 
 class TestIsReasoningEnd:
