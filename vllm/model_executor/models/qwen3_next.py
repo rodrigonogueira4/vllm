@@ -55,6 +55,7 @@ from vllm.model_executor.models.qwen2_moe import Qwen2MoeMLP as Qwen3NextMLP
 from vllm.model_executor.models.utils import sequence_parallel_chunk
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
+from vllm.token_position_steering import apply_steering
 from vllm.transformers_utils.configs.qwen3_next import Qwen3NextConfig
 from vllm.v1.attention.backend import AttentionType
 
@@ -718,6 +719,7 @@ class Qwen3NextModel(nn.Module, EagleModelMixin):
                 hidden_states=hidden_states,
                 residual=residual,
             )
+            hidden_states, residual = apply_steering(layer_idx, hidden_states, residual)
             self._maybe_add_hidden_state(
                 aux_hidden_states, layer_idx + 1, hidden_states, residual
             )
