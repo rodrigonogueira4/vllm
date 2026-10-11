@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Rerun frozen steering conformance with invariant batches in a new directory.
+"""Rerun frozen steering conformance in a new directory.
 
 The caller supplies an existing, hash-frozen experiment and its HF reference
-outputs. This changes the batch-invariance environment only; all cases, masks,
+outputs. Change one numerical implementation option; all cases, masks,
 thresholds, and conditional performance checks remain in the frozen probe.
 """
 
@@ -27,10 +27,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--mode", choices=["batch-invariant", "hf-residual-norm"], required=True
+    )
     args = parser.parse_args()
     root = args.experiment.resolve()
     output = args.output.resolve()
-    assert os.environ.get("VLLM_BATCH_INVARIANT") == "1"
+    invariant = args.mode == "batch-invariant"
+    assert os.environ.get("VLLM_BATCH_INVARIANT", "0") == str(int(invariant))
     assert not output.exists(), "Use a fresh directory; never append another trial."
     manifest = json.loads((root / "source_manifest.json").read_text())
     for name, expected in manifest.items():
@@ -51,7 +55,8 @@ def main() -> None:
                 "source_manifest_sha256": digest(root / "source_manifest.json"),
                 "reference_hashes": hashes,
                 "script_sha256": digest(Path(__file__)),
-                "environment_change": {"VLLM_BATCH_INVARIANT": "1"},
+                "diagnostic_mode": args.mode,
+                "environment": {"VLLM_BATCH_INVARIANT": str(int(invariant))},
                 "cases_and_gates_unchanged": True,
                 "scientific_adoption": False,
             },
@@ -63,6 +68,19 @@ def main() -> None:
     sys.path.insert(0, str(root))
     common = importlib.import_module("common")
     common.OUT = output
+    common.CFG = dict(common.CFG)
+    common.CFG["fork_commit"] = os.environ["VLLM_DIAGNOSTIC_FORK_COMMIT"]
+    if args.mode == "hf-residual-norm":
+        import vllm
+
+        original_llm = vllm.LLM
+
+        def configured_llm(**kwargs):
+            extra = dict(kwargs["additional_config"])
+            extra["token_position_steering_hf_norm"] = True
+            return original_llm(**(kwargs | {"additional_config": extra}))
+
+        vllm.LLM = configured_llm
 
     def stage(name: str) -> None:
         (output / "current-stage.txt").write_text(name + "\n")

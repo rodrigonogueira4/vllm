@@ -55,6 +55,10 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.sequence import IntermediateTensors
+from vllm.token_position_steering import (
+    ExperimentalHFRMSNorm,
+    hf_residual_norm_enabled,
+)
 from vllm.tokenizers.registry import cached_tokenizer_from_config
 from vllm.transformers_utils.configs.qwen3_5 import Qwen3_5Config, Qwen3_5TextConfig
 from vllm.transformers_utils.configs.qwen3_5_moe import (
@@ -179,10 +183,13 @@ class Qwen3_5DecoderLayer(Qwen3NextDecoderLayer):
         else:
             raise ValueError(f"Invalid model_type {config.model_type}")
 
-        self.input_layernorm = Qwen3_5RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
+        norm_class = (
+            ExperimentalHFRMSNorm
+            if hf_residual_norm_enabled(vllm_config)
+            else Qwen3_5RMSNorm
         )
-        self.post_attention_layernorm = Qwen3_5RMSNorm(
+        self.input_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = norm_class(
             config.hidden_size, eps=config.rms_norm_eps
         )
 
@@ -270,7 +277,12 @@ class Qwen3_5Model(Qwen3NextModel):
         )
 
         if get_pp_group().is_last_rank:
-            self.norm = Qwen3_5RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            norm_class = (
+                ExperimentalHFRMSNorm
+                if hf_residual_norm_enabled(vllm_config)
+                else Qwen3_5RMSNorm
+            )
+            self.norm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
         else:
             self.norm = PPMissingLayer()
 

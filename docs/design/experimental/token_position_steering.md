@@ -55,5 +55,20 @@ forcing, sampler/EOS and matched-work timing. Do not relax a gate to adopt this
 backend. The prior 15.48 percentage-point gap is not explained by this patch.
 Current HF experiments remain unchanged.
 
+### HF residual rounding diagnostic
+
+`additional_config.token_position_steering_hf_norm=True` opts into a separate
+Qwen3.5 RMSNorm implementation for input, post-attention and final norms. It
+materializes each residual addition in model dtype before FP32 normalization,
+matching the order used by HF. Standard vLLM fused residual normalization sums
+in FP32 before rounding. The default remains unchanged. This diagnostic requires
+the steering opt-in, supported eager single-worker runtime and unquantized weights.
+It does not change weights, steering masks, dose or conformance thresholds.
+
+The first GPU trial failed cross-backend and batch probability parity. A second
+trial with `VLLM_BATCH_INVARIANT=1` stopped during engine initialization because
+GDN attention does not support that mode; its guard was not bypassed. The HF
+rounding diagnostic requires a fresh full GPU conformance run before any adoption.
+
 AI-assisted implementation by Codex. No upstream PR or human model-validation
 approval is asserted.

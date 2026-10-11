@@ -18,6 +18,40 @@ import torch
 KEY = "token_position_steering"
 
 
+class ExperimentalHFRMSNorm(torch.nn.Module):
+    """Match Qwen3.5 HF's model-dtype residual sum before FP32 RMSNorm.
+
+    This intentionally avoids fused FP32 residual addition. Its use is opt-in
+    for numerical conformance diagnostics, not a claim of backend equivalence.
+    """
+
+    def __init__(self, hidden_size: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.zeros(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, x, residual=None):
+        combined = x if residual is None else x + residual
+        value = combined.float()
+        value = value * torch.rsqrt(
+            value.pow(2).mean(-1, keepdim=True) + self.variance_epsilon
+        )
+        value = (value * (1.0 + self.weight.float())).to(combined.dtype)
+        return value if residual is None else (value, combined)
+
+
+def hf_residual_norm_enabled(config):
+    """Require explicit steering opt-in and the same supported runtime."""
+    enabled = config.additional_config.get("token_position_steering_hf_norm", False)
+    if not enabled:
+        return False
+    width = config.model_config.hf_text_config.hidden_size
+    validate_runtime(config, SteeringSpec(0, (0.0,) * width, frozenset(), 0.0))
+    if config.quant_config is not None:
+        raise ValueError("HF residual rounding requires unquantized native weights")
+    return True
+
+
 @dataclass(frozen=True)
 class SteeringSpec:
     layer: int

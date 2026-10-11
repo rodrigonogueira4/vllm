@@ -45,7 +45,41 @@ def config():
         scheduler_config=NS(async_scheduling=False),
         speculative_config=None,
         kv_transfer_config=None,
+        quant_config=None,
     )
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_hf_norm_matches_explicit_model_dtype_residual_addition(dtype):
+    generator = torch.Generator().manual_seed(31)
+    h = torch.randn(3, 128, generator=generator).to(dtype)
+    residual = torch.randn(3, 128, generator=generator).to(dtype)
+    before_h, before_residual = h.clone(), residual.clone()
+    norm = steering.ExperimentalHFRMSNorm(128).to(dtype)
+    with torch.no_grad():
+        norm.weight.copy_(torch.randn(128, generator=generator).to(dtype))
+    expected = norm(h + residual)
+    output, new_residual = norm(h, residual)
+    assert torch.equal(output, expected)
+    assert torch.equal(new_residual, h + residual)
+    assert torch.equal(h, before_h) and torch.equal(residual, before_residual)
+    if dtype == torch.bfloat16:
+        unrounded = norm(h.float() + residual.float()).to(dtype)
+        assert not torch.equal(output, unrounded)
+
+
+def test_hf_norm_diagnostic_requires_explicit_opt_in_and_native_weights():
+    cfg = config()
+    assert not steering.hf_residual_norm_enabled(cfg)
+    cfg.additional_config["token_position_steering_hf_norm"] = True
+    assert steering.hf_residual_norm_enabled(cfg)
+    cfg.additional_config["enable_token_position_steering"] = False
+    with pytest.raises(ValueError, match="explicit"):
+        steering.hf_residual_norm_enabled(cfg)
+    cfg.additional_config["enable_token_position_steering"] = True
+    cfg.quant_config = object()
+    with pytest.raises(ValueError, match="unquantized"):
+        steering.hf_residual_norm_enabled(cfg)
 
 
 def test_chunked_prefill_decode_and_batch_reordering_use_absolute_positions():
