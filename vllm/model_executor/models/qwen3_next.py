@@ -719,7 +719,10 @@ class Qwen3NextModel(nn.Module, EagleModelMixin):
                 hidden_states=hidden_states,
                 residual=residual,
             )
-            hidden_states, residual = apply_steering(layer_idx, hidden_states, residual)
+            if getattr(self, "token_position_steering_enabled", False):
+                hidden_states, residual = apply_steering(
+                    layer_idx, hidden_states, residual
+                )
             self._maybe_add_hidden_state(
                 aux_hidden_states, layer_idx + 1, hidden_states, residual
             )

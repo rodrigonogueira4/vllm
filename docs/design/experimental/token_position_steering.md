@@ -4,6 +4,8 @@ Fork branch `token-position-steering-20261011`, based on v0.30.0
 `ced6857afa0ea7b2e3f0846a62e1394e90f15607`. This is new engineering work;
 the previous vLLM-lens validation remains closed and failed.
 
+Enable `additional_config={"enable_token_position_steering": True}` on the
+engine. The default model path bypasses the steering callback entirely.
 For text-only Qwen3.5, send one intervention per request through the existing
 serialized sampling parameters:
 

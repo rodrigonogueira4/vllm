@@ -56,6 +56,8 @@ class SteeringSpec:
 
 def validate_runtime(config, spec):
     """Reject modes that have not passed the steering conformance gate."""
+    if not config.additional_config.get("enable_token_position_steering", False):
+        raise ValueError("Token steering requires explicit additional_config opt-in")
     m, p, c, s = (
         config.model_config,
         config.parallel_config,

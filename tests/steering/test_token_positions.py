@@ -31,6 +31,7 @@ def spec(positions, coefficient=1, layer=2, vector=None):
 
 def config():
     return NS(
+        additional_config={"enable_token_position_steering": True},
         model_config=NS(
             enforce_eager=True,
             hf_text_config=NS(
@@ -154,3 +155,10 @@ def test_runner_uses_each_requests_sampling_parameters_and_current_offsets():
     with steering.runner_context(runner, NS(num_scheduled_tokens={"a": 2, "b": 1})):
         out, _ = steering.apply_steering(2, h, None)
     assert torch.equal(out, torch.tensor([[0.25, -0.5], [0, 0], [0, 0]]))
+
+
+def test_request_cannot_silently_steer_a_model_without_opt_in():
+    c = config()
+    c.additional_config = {}
+    with pytest.raises(ValueError, match="opt-in"):
+        steering.validate_runtime(c, spec([0]))

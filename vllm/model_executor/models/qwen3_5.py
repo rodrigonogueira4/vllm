@@ -238,6 +238,9 @@ class Qwen3_5Model(Qwen3NextModel):
         self.num_redundant_experts = eplb_config.num_redundant_experts
 
         self.config = config
+        self.token_position_steering_enabled = vllm_config.additional_config.get(
+            "enable_token_position_steering", False
+        )
         self.quant_config = vllm_config.quant_config
 
         self.vocab_size = config.vocab_size
