@@ -28,13 +28,17 @@ def main() -> None:
     parser.add_argument("--experiment", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--mode", choices=["batch-invariant", "hf-residual-norm"], required=True
+        "--mode",
+        choices=["batch-invariant", "hf-residual-norm", "gdn-triton"],
+        required=True,
     )
     args = parser.parse_args()
     root = args.experiment.resolve()
     output = args.output.resolve()
     invariant = args.mode == "batch-invariant"
     assert os.environ.get("VLLM_BATCH_INVARIANT", "0") == str(int(invariant))
+    if args.mode == "gdn-triton":
+        assert os.environ.get("VLLM_GDN_DECODE_KERNEL") == "triton"
     assert not output.exists(), "Use a fresh directory; never append another trial."
     manifest = json.loads((root / "source_manifest.json").read_text())
     for name, expected in manifest.items():
@@ -56,7 +60,12 @@ def main() -> None:
                 "reference_hashes": hashes,
                 "script_sha256": digest(Path(__file__)),
                 "diagnostic_mode": args.mode,
-                "environment": {"VLLM_BATCH_INVARIANT": str(int(invariant))},
+                "environment": {
+                    "VLLM_BATCH_INVARIANT": str(int(invariant)),
+                    "VLLM_GDN_DECODE_KERNEL": os.environ.get(
+                        "VLLM_GDN_DECODE_KERNEL", "cuda"
+                    ),
+                },
                 "cases_and_gates_unchanged": True,
                 "scientific_adoption": False,
             },
@@ -70,14 +79,17 @@ def main() -> None:
     common.OUT = output
     common.CFG = dict(common.CFG)
     common.CFG["fork_commit"] = os.environ["VLLM_DIAGNOSTIC_FORK_COMMIT"]
-    if args.mode == "hf-residual-norm":
+    if args.mode in ("hf-residual-norm", "gdn-triton"):
         import vllm
 
         original_llm = vllm.LLM
 
         def configured_llm(**kwargs):
             extra = dict(kwargs["additional_config"])
-            extra["token_position_steering_hf_norm"] = True
+            if args.mode == "hf-residual-norm":
+                extra["token_position_steering_hf_norm"] = True
+            else:
+                extra["gdn_prefill_backend"] = "triton"
             return original_llm(**(kwargs | {"additional_config": extra}))
 
         vllm.LLM = configured_llm
